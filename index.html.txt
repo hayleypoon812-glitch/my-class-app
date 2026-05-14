@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>小學老師計分助手</title>
+    <style>
+        :root { --primary: #2196F3; --secondary: #4CAF50; --danger: #f44336; --dark: #333; }
+        body { font-family: sans-serif; background: #f0f2f5; margin: 0; padding: 10px; padding-bottom: 80px; }
+        
+        /* 班別切換按鈕 */
+        .class-selector { display: flex; gap: 5px; margin-bottom: 15px; }
+        .class-btn { flex: 1; padding: 10px; border: none; border-radius: 5px; background: #ddd; font-weight: bold; }
+        .class-btn.active { background: var(--primary); color: white; }
+
+        /* 功能按鈕 */
+        .action-bar { display: flex; gap: 5px; margin-bottom: 15px; }
+        .action-btn { flex: 1; padding: 12px; border: none; border-radius: 8px; color: white; font-weight: bold; cursor: pointer; }
+        .btn-random { background: #9c27b0; }
+        .btn-rank { background: #ff9800; }
+        .btn-import { background: #607d8b; }
+
+        /* 學生列表 */
+        .student-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+        .student-card { 
+            background: white; padding: 12px; border-radius: 10px; 
+            display: flex; justify-content: space-between; align-items: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .student-info { display: flex; align-items: center; gap: 10px; font-size: 18px; flex-grow: 1; }
+        .st-num { color: #888; font-size: 14px; width: 25px; }
+        .st-name { font-weight: bold; }
+        
+        /* 分數顯示及操作 */
+        .score-zone { display: flex; align-items: center; gap: 10px; }
+        .score-display { 
+            background: #e3f2fd; color: var(--primary); padding: 8px 15px; 
+            border-radius: 8px; font-weight: bold; min-width: 30px; text-align: center;
+        }
+        .btn-edit { font-size: 12px; color: #999; text-decoration: underline; cursor: pointer; }
+
+        /* 彈窗樣式 */
+        .overlay { 
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+            background: rgba(0,0,0,0.8); z-index: 100; justify-content: center; align-items: center; color: white;
+        }
+        .modal { background: white; color: black; padding: 20px; border-radius: 15px; width: 85%; max-width: 400px; }
+        textarea { width: 100%; height: 150px; margin: 10px 0; }
+        
+        /* 排行榜視圖 */
+        #rankView .student-card { border-left: 5px solid gold; }
+    </style>
+</head>
+<body>
+
+    <div class="class-selector">
+        <button class="class-btn active" onclick="switchClass('4A')">4A</button>
+        <button class="class-btn" onclick="switchClass('4E')">4E</button>
+        <button class="class-btn" onclick="switchClass('5A')">5A</button>
+    </div>
+
+    <div class="action-bar">
+        <button class="action-btn btn-random" onclick="pickRandom()">🎲 隨機抽籤</button>
+        <button class="action-btn btn-rank" onclick="toggleRank()">🏆 排行榜</button>
+        <button class="action-btn btn-import" onclick="showImport()">📥 匯入名單</button>
+    </div>
+
+    <div id="studentList" class="student-grid"></div>
+    <div id="rankView" class="student-grid" style="display:none;"></div>
+
+    <div id="randomOverlay" class="overlay" onclick="this.style.display='none'">
+        <div style="text-align:center;">
+            <h2 style="font-size:24px;">抽到學生：</h2>
+            <div id="randomResult" style="font-size:60px; font-weight:bold; margin:20px 0;">?</div>
+            <p>點擊畫面關閉</p>
+        </div>
+    </div>
+
+    <div id="importOverlay" class="overlay">
+        <div class="modal">
+            <h3>匯入名單 (<span id="importClassName"></span>)</h3>
+            <p>格式：學號,姓名 (每行一位)<br>例：1,陳大文</p>
+            <textarea id="importData" placeholder="1,陳大文&#10;2,張小明"></textarea>
+            <div style="display:flex; gap:10px;">
+                <button onclick="doImport()" style="flex:1; background:var(--secondary); color:white; border:none; padding:10px; border-radius:5px;">確認匯入</button>
+                <button onclick="closeImport()" style="flex:1; background:#ccc; border:none; padding:10px; border-radius:5px;">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentClass = '4A';
+        let allData = JSON.parse(localStorage.getItem('classroom_v2')) || { '4A': [], '4E': [], '5A': [] };
+        let isRankMode = false;
+
+        function save() {
+            localStorage.setItem('classroom_v2', JSON.stringify(allData));
+        }
+
+        function switchClass(cls) {
+            currentClass = cls;
+            isRankMode = false;
+            document.querySelectorAll('.class-btn').forEach(b => {
+                b.classList.toggle('active', b.innerText === cls);
+            });
+            document.getElementById('rankView').style.display = 'none';
+            document.getElementById('studentList').style.display = 'grid';
+            render();
+        }
+
+        function render() {
+            const listDiv = document.getElementById('studentList');
+            const rankDiv = document.getElementById('rankView');
+            listDiv.innerHTML = '';
+            rankDiv.innerHTML = '';
+
+            const students = allData[currentClass];
+
+            // 1. 渲染普通列表 (按學號排序)
+            const sortedByNum = [...students].sort((a,b) => a.no - b.no);
+            sortedByNum.forEach(s => {
+                listDiv.appendChild(createStudentCard(s));
+            });
+
+            // 2. 渲染排行榜 (按分數排序)
+            const sortedByScore = [...students].sort((a,b) => b.score - a.score);
+            sortedByScore.forEach((s, idx) => {
+                const card = createStudentCard(s);
+                card.style.borderLeft = (idx < 3) ? '5px solid #FFD700' : '5px solid #ccc';
+                rankDiv.appendChild(card);
+            });
+        }
+
+        function createStudentCard(s) {
+            const div = document.createElement('div');
+            div.className = 'student-card';
+            div.innerHTML = `
+                <div class="student-info" onclick="addPoint(${s.no})">
+                    <span class="st-num">${s.no}</span>
+                    <span class="st-name">${s.name}</span>
+                </div>
+                <div class="score-zone">
+                    <div class="score-display" onclick="addPoint(${s.no})">${s.score}</div>
+                    <div class="btn-edit" onclick="manualEdit(${s.no})">改分</div>
+                </div>
+            `;
+            return div;
+        }
+
+        function addPoint(no) {
+            const s = allData[currentClass].find(x => x.no == no);
+            if(s) {
+                s.score += 1;
+                save();
+                render();
+            }
+        }
+
+        // --- 後台直接改分功能 ---
+        function manualEdit(no) {
+            const s = allData[currentClass].find(x => x.no == no);
+            const newScore = prompt(`修改 ${s.name} 的總分數:`, s.score);
+            if (newScore !== null && !isNaN(newScore)) {
+                s.score = parseInt(newScore);
+                save();
+                render();
+            }
+        }
+
+        function toggleRank() {
+            isRankMode = !isRankMode;
+            document.getElementById('studentList').style.display = isRankMode ? 'none' : 'grid';
+            document.getElementById('rankView').style.display = isRankMode ? 'grid' : 'none';
+            document.querySelector('.btn-rank').innerText = isRankMode ? '⬅️ 返回列表' : '🏆 排行榜';
+        }
+
+        function pickRandom() {
+            const students = allData[currentClass];
+            if(students.length === 0) return alert('名單係空嘅！');
+            const randomStudent = students[Math.floor(Math.random() * students.length)];
+            document.getElementById('randomResult').innerText = randomStudent.name;
+            document.getElementById('randomOverlay').style.display = 'flex';
+        }
+
+        // --- 匯入功能 ---
+        function showImport() {
+            document.getElementById('importClassName').innerText = currentClass;
+            document.getElementById('importOverlay').style.display = 'flex';
+        }
+        function closeImport() { document.getElementById('importOverlay').style.display = 'none'; }
+        
+        function doImport() {
+            const text = document.getElementById('importData').value.trim();
+            if(!text) return;
+            const lines = text.split('\n');
+            const newList = [];
+            lines.forEach(line => {
+                const parts = line.split(',');
+                if(parts.length >= 2) {
+                    newList.push({ 
+                        no: parseInt(parts[0]), 
+                        name: parts[1].trim(), 
+                        score: 0 
+                    });
+                }
+            });
+            if(confirm(`將會覆蓋 ${currentClass} 的現有名單，確定嗎？`)) {
+                allData[currentClass] = newList;
+                save();
+                render();
+                closeImport();
+                document.getElementById('importData').value = '';
+            }
+        }
+
+        render();
+    </script>
+</body>
+</html>
